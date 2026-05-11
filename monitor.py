@@ -37,47 +37,97 @@ def hay_boletas(url):
     try:
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
-        texto = soup.get_text().lower()
         
-        # PRIMERO: Si dice explícitamente "agotado" -> NO hay boletas
-        if "agotado" in texto:
-            # Buscar que no sea parte de "no agotado" o texto similar
-            if "todas las localidades están agotadas" in texto or "entradas agotadas" in texto:
+        # Buscar la palabra "Agotado" en el texto visible de la página
+        texto_completo = soup.get_text()
+        
+        # Método 1: Buscar el título de la página
+        titulo = soup.find('title')
+        if titulo:
+            titulo_texto = titulo.get_text().lower()
+            if 'agotado' in titulo_texto:
+                logging.info(f"Título dice AGOTADO: {titulo_texto[:50]}")
                 return False
         
-        # Si encuentra un botón de compra real (señal más confiable)
-        botones = soup.find_all('button', string=lambda x: x and 'comprar' in x.lower())
-        if botones:
+        # Método 2: Buscar en el cuerpo principal
+        # Si encuentra "agotado" y NO encuentra "comprar" cerca, asumimos agotado
+        if 'agotado' in texto_completo.lower():
+            # Verificar si también hay "comprar" muy cerca (menos de 500 caracteres)
+            idx_agotado = texto_completo.lower().find('agotado')
+            if idx_agotado != -1:
+                # Revisar los 1000 caracteres alrededor de "agotado"
+                inicio = max(0, idx_agotado - 500)
+                fin = min(len(texto_completo), idx_agotado + 500)
+                contexto = texto_completo[inicio:fin].lower()
+                
+                # Si en el contexto aparece "comprar" y NO aparece "agotado" de nuevo
+                if 'comprar' in contexto and contexto.count('agotado') <= 1:
+                    logging.info("Posible liberación detectada - contexto contiene 'comprar' cerca de 'agotado'")
+                    # Hacer una verificación más profunda
+                    return _verificar_boton_compra(soup)
+        
+        # Si no hay "agotado" en todo el texto, asumimos que hay boletas
+        if 'agotado' not in texto_completo.lower():
+            logging.info("No se encontró la palabra 'agotado' - asumiendo boletas disponibles")
             return True
             
-        # Si hay un enlace o texto que indica compra activa
-        if "comprar boletas" in texto or "comprar entradas" in texto:
-            # Verificar que NO diga "agotado" cerca
-            if "agotado" not in texto[texto.find("comprar"):texto.find("comprar")+200]:
-                return True
-                
         return False
+        
     except Exception as e:
         logging.error(f"Error revisando {url}: {e}")
         return False
 
+def _verificar_boton_compra(soup):
+    """Verificación adicional: buscar botones de compra reales"""
+    try:
+        # Buscar botones que digan "comprar"
+        botones = soup.find_all(['button', 'a'], string=lambda x: x and 'comprar' in x.lower())
+        if botones:
+            logging.info(f"✅ Botón de comprar encontrado: {botones[0].get_text()}")
+            return True
+        
+        # Buscar enlaces que digan "comprar"
+        enlaces = soup.find_all('a', href=True)
+        for enlace in enlaces:
+            texto = enlace.get_text().lower()
+            if 'comprar' in texto or 'buy' in texto:
+                logging.info(f"✅ Enlace de comprar encontrado: {texto[:50]}")
+                return True
+                
+        return False
+    except:
+        return False
+
 async def main():
-    logging.info("Iniciando monitoreo de boletas BTS...")
-    logging.info("Versión mejorada - detección más precisa")
+    logging.info("=== INICIANDO MONITOR VERSIÓN CORREGIDA ===")
+    logging.info("Detección basada en la palabra 'Agotado'")
+    logging.info("===========================================")
+    
+    # Estado inicial: asumimos que no hay boletas
     estados_previos = {url: False for url in URLS}
     
     while True:
         for url in URLS:
-            disponible = hay_boletas(url)
-            fecha = 'Sábado' if 'sabado' in url else 'Viernes'
-            logging.info(f"{fecha}: {'DISPONIBLE' if disponible else 'AGOTADO'}")
-            
-            if disponible and not estados_previos[url]:
-                logging.info(f"¡LIBERADAS! {url}")
-                await enviar_alerta(url)
-                estados_previos[url] = True
-            elif not disponible:
-                estados_previos[url] = False
+            try:
+                disponible = hay_boletas(url)
+                fecha = 'Sábado' if 'sabado' in url else 'Viernes'
+                
+                if disponible:
+                    logging.info(f"{fecha}: ✅ DISPONIBLE (enviando alerta si no se envió antes)")
+                else:
+                    logging.info(f"{fecha}: ❌ AGOTADO")
+                
+                # Solo enviar alerta si cambió de agotado a disponible
+                if disponible and not estados_previos[url]:
+                    logging.info(f"🎉 ¡CAMBIÓ A DISPONIBLE! Enviando alerta para {fecha}")
+                    await enviar_alerta(url)
+                    estados_previos[url] = True
+                elif not disponible:
+                    estados_previos[url] = False
+                    
+            except Exception as e:
+                logging.error(f"Error procesando {url}: {e}")
+                
         await asyncio.sleep(TIEMPO_ENTRE_CHECKS)
 
 if __name__ == "__main__":
