@@ -7,7 +7,6 @@ from telegram import Bot
 import logging
 
 # ================= CONFIGURACIÓN =================
-# Estas variables las leeremos de Render (no pongas nada aquí)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
@@ -18,9 +17,8 @@ URLS = [
 TIEMPO_ENTRE_CHECKS = 60
 # =================================================
 
-# Verificar que las variables existen
 if not TELEGRAM_TOKEN or not CHAT_ID:
-    raise Exception("Faltan variables de entorno. Configura TELEGRAM_TOKEN y CHAT_ID")
+    raise Exception("Faltan variables de entorno")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -41,12 +39,23 @@ def hay_boletas(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         texto = soup.get_text().lower()
         
-        if "agotado" in texto or "no hay entradas" in texto:
-            return False
-        if "comprar" in texto or "venta general" in texto:
-            if "boletas disponibles" in texto or "elige tu ubicación" in texto:
-                return True
+        # PRIMERO: Si dice explícitamente "agotado" -> NO hay boletas
+        if "agotado" in texto:
+            # Buscar que no sea parte de "no agotado" o texto similar
+            if "todas las localidades están agotadas" in texto or "entradas agotadas" in texto:
+                return False
+        
+        # Si encuentra un botón de compra real (señal más confiable)
+        botones = soup.find_all('button', string=lambda x: x and 'comprar' in x.lower())
+        if botones:
             return True
+            
+        # Si hay un enlace o texto que indica compra activa
+        if "comprar boletas" in texto or "comprar entradas" in texto:
+            # Verificar que NO diga "agotado" cerca
+            if "agotado" not in texto[texto.find("comprar"):texto.find("comprar")+200]:
+                return True
+                
         return False
     except Exception as e:
         logging.error(f"Error revisando {url}: {e}")
@@ -54,11 +63,15 @@ def hay_boletas(url):
 
 async def main():
     logging.info("Iniciando monitoreo de boletas BTS...")
+    logging.info("Versión mejorada - detección más precisa")
     estados_previos = {url: False for url in URLS}
     
     while True:
         for url in URLS:
             disponible = hay_boletas(url)
+            fecha = 'Sábado' if 'sabado' in url else 'Viernes'
+            logging.info(f"{fecha}: {'DISPONIBLE' if disponible else 'AGOTADO'}")
+            
             if disponible and not estados_previos[url]:
                 logging.info(f"¡LIBERADAS! {url}")
                 await enviar_alerta(url)
