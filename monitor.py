@@ -11,8 +11,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 URLS = [
-    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-sabado-3-octubre",
-    "https://www.ticketmaster.co/event/bts-world-tour-venta-general-viernes-2-octubre"
+    "https://www.ticketmaster.co/event/bts-world-tour-2026",
 ]
 TIEMPO_ENTRE_CHECKS = 60
 # =================================================
